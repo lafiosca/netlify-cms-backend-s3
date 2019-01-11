@@ -1,0 +1,26 @@
+{
+  "name": "netlify-cms-backend-s3",
+  "version": "0.1.0",
+  "description": "Netlify CMS custom backend for AWS S3",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/lafiosca/netlify-cms-backend-s3.git"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "lint": "./node_modules/.bin/tslint -p tsconfig.json -c tslint.json",
+    "build": "./node_modules/.bin/tsc",
+    "prepublish": "./node_modules/.bin/tsc"
+  },
+  "author": "Joe Lafiosca <joe@lafiosca.com>",
+  "license": "MIT",
+  "dependencies": {
+  },
+  "devDependencies": {
+    "@types/node": "^10.12.18",
+    "tslint": "^5.12.1",
+    "tslint-config-airbnb": "^5.11.1",
+    "typescript": "^3.2.2"
+  }
+}
