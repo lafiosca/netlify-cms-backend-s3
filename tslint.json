@@ -9,7 +9,10 @@
 		"ter-indent": [true, "tab"],
 		"ter-no-tabs": [false],
 		"ter-arrow-parens": [2, "always"],
-		"no-console": [false]
+		"no-console": [false],
+		"import-name": [true, {
+			"react": "React"
+		}]
 	},
 	"rulesDirectory": []
 }
