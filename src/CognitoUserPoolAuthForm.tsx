@@ -1,18 +1,5 @@
 import React from 'react';
-
-export interface Credentials {
-	email: string;
-	password: string;
-}
-
-export interface UserData {
-	foo: any;
-}
-
-interface State {
-	email: string;
-	password: string;
-}
+import { Credentials } from './S3Backend';
 
 interface Props {
 	onLogin: (credentials: Credentials) => void;
@@ -30,7 +17,12 @@ interface Props {
 	// clearHash: () => history.replace('/'),
 }
 
-class CognitoUserPoolAuth extends React.Component<Props, State> {
+interface State {
+	email: string;
+	password: string;
+}
+
+class CognitoUserPoolAuthForm extends React.Component<Props, State> {
 	state = {
 		session: null,
 		loginError: null,
@@ -41,7 +33,9 @@ class CognitoUserPoolAuth extends React.Component<Props, State> {
 	private handleLogin = (event: React.MouseEvent<HTMLButtonElement, MouseEvent>) => {
 		event.preventDefault();
 		const { email, password } = this.state;
-		this.props.onLogin({ email, password });
+		if (email && password) {
+			this.props.onLogin({ email, password });
+		}
 	}
 
 	private updateEmail = (event: React.ChangeEvent<HTMLInputElement>) =>
@@ -84,7 +78,7 @@ class CognitoUserPoolAuth extends React.Component<Props, State> {
 						onClick={this.handleLogin}
 						disabled={inProgress}
 					>
-						{inProgress ? 'Logging in' : 'Log In'}
+						{inProgress ? 'Logging in...' : 'Login'}
 					</button>
 					{/* <div className="lds-spinner">
 						<div /><div /><div /><div /><div /><div /><div /><div /><div /><div /><div /><div />
@@ -92,11 +86,11 @@ class CognitoUserPoolAuth extends React.Component<Props, State> {
 				</div>
 				<br />
 				{loginError && (
-					<p className="error">Failed to log in: {loginError}</p>
+					<p>Failed to log in: {loginError}</p>
 				)}
 			</div>
 		);
 	}
 }
 
-export default CognitoUserPoolAuth;
+export default CognitoUserPoolAuthForm;

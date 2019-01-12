@@ -1,10 +1,10 @@
 import { Map } from 'immutable';
-import { UserData } from './CognitoUserPoolAuth';
+import { CognitoUserSession } from 'amazon-cognito-identity-js';
 
 export interface CmsConfig extends Map<string, any> {}
 
 export interface BackendOptions {
 	useWorkflow: boolean;
-	updateUserCredentials: (user: UserData) => void;
+	updateUserCredentials: (user: CognitoUserSession) => void;
 	initialWorkflowStatus: string;
 }

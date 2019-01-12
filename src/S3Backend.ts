@@ -1,32 +1,93 @@
-import CognitoUserPoolAuth, { Credentials, UserData } from './CognitoUserPoolAuth';
+import { Auth } from 'aws-amplify';
+import { Credentials } from '@aws-amplify/core';
+
+import CognitoUserPoolAuthForm from './CognitoUserPoolAuthForm';
 import { CmsConfig, BackendOptions } from './NetlifyTypes';
+import { CognitoUserSession } from 'amazon-cognito-identity-js';
+
+export interface Credentials {
+	email: string;
+	password: string;
+}
 
 class S3Backend {
 	config: CmsConfig;
 	options: BackendOptions;
+	token: string = '';
 
 	constructor(config: CmsConfig, options: BackendOptions) {
 		this.config = config;
 		this.options = options;
+		this.configureAmplify(config);
+	}
+
+	private generateConfigFetcher = (section: string, required: string[]) =>
+		(config: any) => {
+			if (!config.getIn(['backend', section])) {
+				throw new Error(`Missing backend ${section} config`);
+			}
+			const pickedConfig = required.reduce<{ [key: string]: any }>(
+				(ac, field) => ({
+					...ac,
+					[field]: config.getIn(['backend', section, field]),
+				}),
+				{},
+			);
+			const missing = required.filter((field) => !pickedConfig[field]);
+			if (missing.length > 0) {
+				throw new Error(`Missing backend ${section} config fields: ${missing.join(', ')}`);
+			}
+			return pickedConfig;
+		}
+
+	private fetchAmplifyAuthConfig = this.generateConfigFetcher(
+		'auth',
+		[
+			'identityPoolId',
+			'region',
+			'userPoolId',
+			'userPoolWebClientId',
+		],
+	);
+
+	private fetchAmplifyStorageConfig = this.generateConfigFetcher(
+		'storage',
+		['bucket', 'region'],
+	);
+
+	private configureAmplify = (config: any) => {
+		Auth.configure({
+			Auth: this.fetchAmplifyAuthConfig(config),
+			Storage: this.fetchAmplifyStorageConfig(config),
+		});
 	}
 
 	/*** Authentication ***/
 
-	authComponent = () => CognitoUserPoolAuth;
+	authComponent = () => CognitoUserPoolAuthForm;
 
-	authenticate = async (credentials: Credentials): Promise<UserData> => {
-		throw new Error('Not implemented');
+	authenticate = async (credentials: Credentials): Promise<CognitoUserSession> => {
+		const user = await Auth.signIn(credentials.email, credentials.password);
+		if (user.challengeName) {
+			throw new Error(`Login challenge handling not implemented for: ${user.challengeName}`);
+		}
+		const session = await Auth.currentSession();
+		this.token = session.getIdToken().getJwtToken();
+		return session;
 	}
 
-	restoreUser = async (user: UserData): Promise<UserData> => {
-		throw new Error('Not implemented');
+	restoreUser = async (user: CognitoUserSession): Promise<CognitoUserSession> => {
+		await Credentials.set(user, 'session');
+		const session = await Auth.currentSession();
+		return session;
 	}
 
-	logout = () => {
-		// forget credentials, sync or async
+	logout = async () => {
+		this.token = '';
+		await Auth.signOut();
 	}
 
-	getToken = () => '';
+	getToken = () => this.token;
 
 	/*** Published entries ***/
 
