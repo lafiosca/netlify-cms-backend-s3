@@ -10,6 +10,23 @@ export interface Credentials {
 	password: string;
 }
 
+interface Entry {
+	raw: string;
+	path: string;
+}
+
+interface PersistEntryArgs {
+	newEntry: boolean;
+	parsedData: {
+		title: string;
+		description: string;
+	};
+	collectionName: string;
+	useWorkflow: boolean;
+	commitMessage: string;
+	hasAssetStore: boolean;
+}
+
 class S3Backend {
 	config: CmsConfig;
 	options: BackendOptions;
@@ -92,16 +109,45 @@ class S3Backend {
 	/*** Published entries ***/
 
 	entriesByFiles = async (collection: CmsConfig) => {
-		throw new Error('Not implemented');
+		// throw new Error('Not implemented');
+		console.log('entriesByFiles:');
+		console.log(`collection: ${JSON.stringify(collection, null, 2)}`);
+		return [
+			{
+				file: {
+					path: 'foo',
+				},
+				data: `
+Hello world
+
+123
+`,
+			},
+		];
 	}
 
 	entriesByFolder = async (collection: CmsConfig, extension: string) => {
-		throw new Error('Not implemented');
+		// throw new Error('Not implemented');
+		console.log('entriesByFolder:');
+		console.log(`collection: ${JSON.stringify(collection, null, 2)}`);
+		console.log(`extension: ${extension}`);
+		return [
+			{
+				file: {
+					path: 'foo',
+				},
+				data: `
+Hello world
+
+123
+`,
+			},
+		];
 	}
 
 	// allEntriesByFolder
 
-	persistEntry = async () => {
+	persistEntry = async (entry: Entry, mediaFiles: any, args: PersistEntryArgs) => {
 		throw new Error('Not implemented');
 	}
 
