@@ -16,7 +16,9 @@
   "author": "Joe Lafiosca <joe@lafiosca.com>",
   "license": "MIT",
   "dependencies": {
-    "aws-amplify": "^1.1.19"
+    "amazon-cognito-identity-js": "^3.0.7",
+    "aws-amplify": "^1.1.19",
+    "aws-sdk": "^2.388.0"
   },
   "devDependencies": {
     "@types/node": "^10.12.18",

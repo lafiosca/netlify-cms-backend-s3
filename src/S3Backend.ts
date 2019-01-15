@@ -1,35 +1,22 @@
 import { Auth } from 'aws-amplify';
 import { Credentials } from '@aws-amplify/core';
-
-import CognitoUserPoolAuthForm from './CognitoUserPoolAuthForm';
-import { CmsConfig, BackendOptions } from './NetlifyTypes';
+import awsSdk from 'aws-sdk';
+import {
+	HeadObjectRequest,
+	PutObjectRequest,
+} from 'aws-sdk/clients/s3';
 import {
 	CognitoUserSession,
 	CognitoIdToken,
 	CognitoAccessToken,
 	CognitoRefreshToken,
 } from 'amazon-cognito-identity-js';
+import { Map } from 'immutable';
+import CognitoUserPoolAuthForm from './CognitoUserPoolAuthForm';
 
-export interface Credentials {
+export interface AuthCredentials {
 	email: string;
 	password: string;
-}
-
-interface Entry {
-	raw: string;
-	path: string;
-}
-
-interface PersistEntryArgs {
-	newEntry: boolean;
-	parsedData: {
-		title: string;
-		description: string;
-	};
-	collectionName: string;
-	useWorkflow: boolean;
-	commitMessage: string;
-	hasAssetStore: boolean;
 }
 
 interface PlainCognitoUserSession {
@@ -38,20 +25,59 @@ interface PlainCognitoUserSession {
 	refreshToken: string;
 }
 
+interface CmsConfig extends Map<string, any> {}
+
+interface BackendOptions {
+	useWorkflow: boolean;
+	updateUserCredentials: (user: PlainCognitoUserSession) => void;
+	initialWorkflowStatus: string;
+}
+
+interface Entry {
+	path: string;
+	slug: string;
+	raw: string;
+}
+
+interface PersistEntryOptions {
+	newEntry: boolean;
+	parsedData?: {
+		title?: string;
+		description?: string;
+	};
+	collectionName: string;
+	useWorkflow: boolean;
+	commitMessage: string;
+	hasAssetStore: boolean;
+}
+
+interface DeleteFileOptions {
+	collection: CmsConfig;
+	slug: string;
+}
+
+interface SimpleConfig {
+	[key: string]: any;
+}
+
 class S3Backend {
 	config: CmsConfig;
 	options: BackendOptions;
 	token: string = '';
+	storageConfig: SimpleConfig;
 
 	constructor(config: CmsConfig, options: BackendOptions) {
 		console.log('S3Backend::constructor');
 		this.config = config;
 		this.options = options;
-		this.configureAmplify(config);
+		Auth.configure({
+			Auth: this.fetchAuthConfig(config),
+		});
+		this.storageConfig = this.fetchStorageConfig(config);
 	}
 
 	private generateConfigFetcher = (section: string, required: string[]) =>
-		(config: any) => {
+		(config: SimpleConfig) => {
 			if (!config.getIn(['backend', section])) {
 				throw new Error(`Missing backend ${section} config`);
 			}
@@ -69,7 +95,7 @@ class S3Backend {
 			return pickedConfig;
 		}
 
-	private fetchAmplifyAuthConfig = this.generateConfigFetcher(
+	private fetchAuthConfig = this.generateConfigFetcher(
 		'auth',
 		[
 			'identityPoolId',
@@ -79,17 +105,18 @@ class S3Backend {
 		],
 	);
 
-	private fetchAmplifyStorageConfig = this.generateConfigFetcher(
+	private fetchStorageConfig = this.generateConfigFetcher(
 		'storage',
 		['bucket', 'region'],
 	);
 
-	private configureAmplify = (config: any) => {
-		Auth.configure({
-			Auth: this.fetchAmplifyAuthConfig(config),
-			Storage: this.fetchAmplifyStorageConfig(config),
-		});
-	}
+	private getS3 = async () => new awsSdk.S3({
+		apiVersion: '2006-03-01',
+		region: this.storageConfig.region,
+		credentials: Auth.essentialCredentials(
+			await Auth.currentCredentials(),
+		),
+	})
 
 	/*** Authentication ***/
 
@@ -108,7 +135,7 @@ class S3Backend {
 		refreshToken: session.getRefreshToken().getToken(),
 	})
 
-	authenticate = async (credentials: Credentials): Promise<PlainCognitoUserSession> => {
+	authenticate = async (credentials: AuthCredentials): Promise<PlainCognitoUserSession> => {
 		console.log('S3Backend::authenticate');
 		const user = await Auth.signIn(credentials.email, credentials.password);
 		if (user.challengeName) {
@@ -147,18 +174,13 @@ class S3Backend {
 		// throw new Error('Not implemented');
 		console.log('S3Backend::entriesByFiles');
 		console.log(`collection: ${JSON.stringify(collection, null, 2)}`);
-		return [
-			{
-				file: {
-					path: 'foo',
-				},
-				data: `
-Hello world
-
-123
-`,
+		return [{
+			file: {
+				path: 'blog/howdy.md',
+				label: 'foobar',
 			},
-		];
+			data: '---\npath: hello\ndate: 2019-01-15T02:01:10.670Z\ntitle: howdy\n---\nhow ya doin\n',
+		}];
 	}
 
 	entriesByFolder = async (collection: CmsConfig, extension: string) => {
@@ -166,28 +188,69 @@ Hello world
 		console.log('S3Backend::entriesByFolder');
 		console.log(`collection: ${JSON.stringify(collection, null, 2)}`);
 		console.log(`extension: ${extension}`);
-		return [
-			{
-				file: {
-					path: 'foo',
-				},
-				data: `
-Hello world
-
-123
-`,
+		return [{
+			file: {
+				path: 'blog/howdy.md',
 			},
-		];
+			data: '---\npath: hello\ndate: 2019-01-15T02:01:10.670Z\ntitle: howdy\n---\nhow ya doin\n',
+		}];
 	}
 
-	// allEntriesByFolder
-
-	persistEntry = async (entry: Entry, mediaFiles: any, args: PersistEntryArgs) => {
+	persistEntry = async (entry: Entry, mediaFiles: any, options: PersistEntryOptions) => {
 		console.log('S3Backend::persistEntry');
+		// entry: {
+		// 	"path": "blog/test-title.md",
+		// 	"slug": "test-title",
+		// 	"raw": "---\npath: test-path\ndate: 2019-01-15T05:16:43.109Z\ntitle: test-title\n
+		//          ---\ntest-body\n"
+		// }
+		// mediaFiles: []
+		// args: {
+		// 	"newEntry": true,
+		// 	"parsedData": {
+		// 	  "title": "test-title",
+		// 	  "description": "No Description!"
+		// 	},
+		// 	"commitMessage": "Create Blog “test-title”",
+		// 	"collectionName": "blog",
+		// 	"useWorkflow": true,
+		// 	"hasAssetStore": false
+		// }
 		console.log(`entry: ${JSON.stringify(entry, null, 2)}`);
 		console.log(`mediaFiles: ${JSON.stringify(mediaFiles, null, 2)}`);
-		console.log(`args: ${JSON.stringify(args, null, 2)}`);
-		throw new Error('Not implemented');
+		console.log(`args: ${JSON.stringify(options, null, 2)}`);
+		const s3 = await this.getS3();
+		const prefix = options.useWorkflow ? 'unpublished' : 'published';
+		const headParams: HeadObjectRequest = {
+			Bucket: this.storageConfig.bucket,
+			Key: `${prefix}/${entry.path}`,
+		};
+		const putParams: PutObjectRequest = {
+			...headParams,
+			ContentType: 'text/markdown; charset=UTF-8',
+			Body: Buffer.from(entry.raw, 'utf8'),
+		};
+		if (options.useWorkflow) {
+			const head = await s3.headObject(headParams).promise()
+				.catch((error) => {
+					console.log('failed to head object');
+					console.log(error);
+					return null;
+				});
+			if (head) {
+				console.log('reusing head metadata:');
+				console.log(head.Metadata);
+				putParams.Metadata = head.Metadata;
+			} else {
+				console.log('creating new metadata');
+				putParams.Metadata = {
+					status: this.options.initialWorkflowStatus,
+				};
+			}
+		}
+		console.log('putParams:');
+		console.log(putParams);
+		await s3.putObject(putParams).promise();
 	}
 
 	getEntry = async (collection: CmsConfig, slug: string, path: string) => {
@@ -209,12 +272,20 @@ Hello world
 
 	getMedia = async () => {
 		console.log('S3Backend::getMedia');
-		throw new Error('Not implemented');
+		return [];
 	}
 
-	deleteMedia = async (path: string) => {
-		console.log('S3Backend::deleteMedia');
+	/*** Published Entries and Media Library ***/
+
+	deleteFile = async (path: string, commitMessage: string, options?: DeleteFileOptions) => {
+		console.log('S3Backend::deleteFile');
 		console.log(`path: ${path}`);
+		console.log(`commitMessage: ${commitMessage}`);
+		if (options) {
+			const { collection, slug } = options;
+			console.log(`collection: ${JSON.stringify(collection, null, 2)}`);
+			console.log(`slug: ${slug}`);
+		}
 		throw new Error('Not implemented');
 	}
 
@@ -222,7 +293,7 @@ Hello world
 
 	unpublishedEntries = async () => {
 		console.log('S3Backend::unpublishedEntries');
-		throw new Error('Not implemented');
+		return [];
 	}
 
 	unpublishedEntry = async (collection: CmsConfig, slug: string) => {

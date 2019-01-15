@@ -1,8 +1,8 @@
 import React from 'react';
-import { Credentials } from './S3Backend';
+import { AuthCredentials } from './S3Backend';
 
 interface Props {
-	onLogin: (credentials: Credentials) => void;
+	onLogin: (credentials: AuthCredentials) => void;
 	error: string | null;
 	inProgress: boolean;
 
