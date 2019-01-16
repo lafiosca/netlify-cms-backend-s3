@@ -11,7 +11,8 @@
 		"ter-arrow-parens": [2, "always"],
 		"no-console": [false],
 		"import-name": [true, {
-			"react": "React"
+			"react": "React",
+			"v4": "uuid"
 		}]
 	},
 	"rulesDirectory": []

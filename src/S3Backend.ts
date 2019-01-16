@@ -12,6 +12,7 @@ import {
 	CognitoRefreshToken,
 } from 'amazon-cognito-identity-js';
 import { Map } from 'immutable';
+import uuid from 'uuid/v4';
 import CognitoUserPoolAuthForm from './CognitoUserPoolAuthForm';
 
 export interface AuthCredentials {
@@ -58,6 +59,16 @@ interface DeleteFileOptions {
 
 interface SimpleConfig {
 	[key: string]: any;
+}
+
+interface AssetProxy {
+	value: string;
+	fileObj: File;
+	path: string;
+	public_path: string;
+	sha: string | null;
+	uploaded: boolean;
+	toBase64: () => string;
 }
 
 class S3Backend {
@@ -263,11 +274,33 @@ class S3Backend {
 
 	/*** Media Library ***/
 
-	persistMedia = async (mediaFile: any, { commitMessage }: { commitMessage: string }) => {
+	persistMedia = async (mediaFile: AssetProxy, { commitMessage }: { commitMessage: string }) => {
 		console.log('S3Backend::persistMedia');
 		console.log(`mediaFile: ${JSON.stringify(mediaFile, null, 2)}`);
 		console.log(`commitMessage: ${commitMessage}`);
-		throw new Error('Not implemented');
+		const s3 = await this.getS3();
+		const id = uuid();
+		const { value, fileObj } = mediaFile;
+		const path = mediaFile.path.replace(/^\/+/, '');
+		const putParams: PutObjectRequest = {
+			Bucket: this.storageConfig.bucket,
+			Key: `media/${path}/${id}`,
+			ContentType: fileObj.type,
+			Body: fileObj,
+			// Metadata: {
+			// 	commitMessage, // doesn't work because of non-ascii chars in message
+			// },
+		};
+		console.log('putParams:');
+		console.log(putParams);
+		await s3.putObject(putParams).promise();
+		return {
+			id,
+			path,
+			url: URL.createObjectURL(fileObj),
+			name: value,
+			size: fileObj.size,
+		};
 	}
 
 	getMedia = async () => {
