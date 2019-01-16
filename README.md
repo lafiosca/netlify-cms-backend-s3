@@ -1,6 +1,10 @@
+# netlify-cms-backend-s3
 
+## Netlify CMS custom backend for AWS S3
 
-## S3 layout
+Work in progress, not ready for general use
+
+### S3 layout
 
 - published
 - unpublished
