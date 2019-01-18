@@ -15,6 +15,10 @@ import { Map } from 'immutable';
 import uuid from 'uuid/v4';
 import CognitoUserPoolAuthForm from './CognitoUserPoolAuthForm';
 
+const defaultPrefixPublished = 'published/';
+const defaultPrefixUnpublished = 'unpublished/';
+const defaultPrefixMedia = 'media/';
+
 export interface AuthCredentials {
 	email: string;
 	password: string;
@@ -284,12 +288,9 @@ class S3Backend {
 		const path = mediaFile.path.replace(/^\/+/, '');
 		const putParams: PutObjectRequest = {
 			Bucket: this.storageConfig.bucket,
-			Key: `media/${path}/${id}`,
+			Key: `${defaultPrefixMedia}${path}/${id}`,
 			ContentType: fileObj.type,
 			Body: fileObj,
-			// Metadata: {
-			// 	commitMessage, // doesn't work because of non-ascii chars in message
-			// },
 		};
 		console.log('putParams:');
 		console.log(putParams);
@@ -305,7 +306,44 @@ class S3Backend {
 
 	getMedia = async () => {
 		console.log('S3Backend::getMedia');
-		return [];
+		const prefix: string = this.config.get('media_folder');
+		if (!prefix) {
+			throw new Error('No media_folder configured');
+		}
+		const fullPrefix = `${defaultPrefixMedia}${prefix}/`;
+		const s3 = await this.getS3();
+		const objectList = await s3.listObjectsV2({
+			Bucket: this.storageConfig.bucket,
+			Prefix: fullPrefix,
+			// TODO: implement pagination
+			// MaxKeys: 1000,
+			// ContinuationToken: foo,
+		}).promise();
+		if (objectList.IsTruncated) {
+			// TODO: implement pagination
+			// objectList.NextContinuationToken
+			console.log('Received truncated object list; implement pagination!');
+		}
+		return objectList.Contents!.map((info) => {
+			console.log(`object key: ${info.Key!}`);
+			const parts = info.Key!.substr(defaultPrefixMedia.length).split('/');
+			console.log(`parts: ${JSON.stringify(parts)}`);
+			const id = parts.pop();
+			const path = `/${parts.join('/')}`;
+			const name = parts.pop();
+			const url = s3.getSignedUrl('getObject', {
+				Bucket: this.storageConfig.bucket,
+				Key: info.Key!,
+			});
+			const media = {
+				id,
+				name,
+				path,
+				url,
+			};
+			console.log(`media: ${JSON.stringify(media, null, 2)}`);
+			return media;
+		});
 	}
 
 	/*** Published Entries and Media Library ***/
