@@ -169,6 +169,7 @@ class S3Backend {
 		console.log('credentials set, fetch current session');
 		const session = this.dehydrateSession(await Auth.currentSession());
 		console.log(`got current session, returning: ${JSON.stringify(session, null, 2)}`);
+		// FIXME: determine why refresh token is not being used
 		return session;
 	}
 
@@ -180,6 +181,7 @@ class S3Backend {
 
 	getToken = () => {
 		console.log('S3Backend::getToken');
+		// TODO: learn more about what use, if any, this token provides
 		return this.token;
 	}
 
