@@ -15,9 +15,9 @@ import { Map } from 'immutable';
 import uuid from 'uuid/v4';
 import CognitoUserPoolAuthForm from './CognitoUserPoolAuthForm';
 
-const defaultPrefixPublished = 'published/';
-const defaultPrefixUnpublished = 'unpublished/';
-const defaultPrefixMedia = 'media/';
+const defaultBasePrefixPublished = 'published';
+const defaultBasePrefixUnpublished = 'unpublished';
+const defaultBasePrefixMedia = 'media';
 
 export interface AuthCredentials {
 	email: string;
@@ -284,21 +284,24 @@ class S3Backend {
 		console.log(`commitMessage: ${commitMessage}`);
 		const s3 = await this.getS3();
 		const id = uuid();
-		const { value, fileObj } = mediaFile;
-		const path = mediaFile.path.replace(/^\/+/, '');
+		const { path, value, fileObj } = mediaFile;
 		const putParams: PutObjectRequest = {
 			Bucket: this.storageConfig.bucket,
-			Key: `${defaultPrefixMedia}${path}/${id}`,
+			Key: `${defaultBasePrefixMedia}${path}/${id}`,
 			ContentType: fileObj.type,
 			Body: fileObj,
 		};
 		console.log('putParams:');
 		console.log(putParams);
 		await s3.putObject(putParams).promise();
+		const url = await s3.getSignedUrl('getObject', {
+			Bucket: putParams.Bucket,
+			Key: putParams.Key,
+		});
 		return {
 			id,
 			path,
-			url: URL.createObjectURL(fileObj),
+			url,
 			name: value,
 			size: fileObj.size,
 		};
@@ -306,15 +309,15 @@ class S3Backend {
 
 	getMedia = async () => {
 		console.log('S3Backend::getMedia');
-		const prefix: string = this.config.get('media_folder');
-		if (!prefix) {
+		const mediaFolder: string = this.config.get('media_folder');
+		if (!mediaFolder) {
 			throw new Error('No media_folder configured');
 		}
-		const fullPrefix = `${defaultPrefixMedia}${prefix}/`;
+		const prefix = `${defaultBasePrefixMedia}/${mediaFolder}/`;
 		const s3 = await this.getS3();
 		const objectList = await s3.listObjectsV2({
 			Bucket: this.storageConfig.bucket,
-			Prefix: fullPrefix,
+			Prefix: prefix,
 			// TODO: implement pagination
 			// MaxKeys: 1000,
 			// ContinuationToken: foo,
@@ -325,24 +328,20 @@ class S3Backend {
 			console.log('Received truncated object list; implement pagination!');
 		}
 		return objectList.Contents!.map((info) => {
-			console.log(`object key: ${info.Key!}`);
-			const parts = info.Key!.substr(defaultPrefixMedia.length).split('/');
-			console.log(`parts: ${JSON.stringify(parts)}`);
+			const parts = info.Key!.substr(defaultBasePrefixMedia.length).split('/');
 			const id = parts.pop();
-			const path = `/${parts.join('/')}`;
+			const path = `${parts.join('/')}`;
 			const name = parts.pop();
 			const url = s3.getSignedUrl('getObject', {
 				Bucket: this.storageConfig.bucket,
 				Key: info.Key!,
 			});
-			const media = {
+			return {
 				id,
 				name,
 				path,
 				url,
 			};
-			console.log(`media: ${JSON.stringify(media, null, 2)}`);
-			return media;
 		});
 	}
 
@@ -352,11 +351,34 @@ class S3Backend {
 		console.log('S3Backend::deleteFile');
 		console.log(`path: ${path}`);
 		console.log(`commitMessage: ${commitMessage}`);
-		if (options) {
+		if (options) { // entry file
 			const { collection, slug } = options;
 			console.log(`collection: ${JSON.stringify(collection, null, 2)}`);
 			console.log(`slug: ${slug}`);
+		} else { // media file
+			const s3 = await this.getS3();
+
+			// find matching paths including id, should only be one
+			const prefix = `${defaultBasePrefixMedia}${path}/`;
+			const objectList = await s3.listObjectsV2({
+				Bucket: this.storageConfig.bucket,
+				Prefix: prefix,
+			}).promise();
+
+			// delete all of them
+			const deletions = objectList.Contents!.map((object) => {
+				console.log(`Found ${object.Key!}`);
+				return s3.deleteObject({
+					Bucket: this.storageConfig.bucket,
+					Key: object.Key!,
+				}).promise();
+			});
+
+			console.log(`Deleting ${deletions.length} object(s)`);
+
+			return Promise.all(deletions);
 		}
+
 		throw new Error('Not implemented');
 	}
 
