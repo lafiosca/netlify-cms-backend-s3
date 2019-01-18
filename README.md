@@ -6,6 +6,6 @@ Work in progress, not ready for general use
 
 ### S3 layout
 
-- published
-- unpublished
-- media
+- published: `published/{path}`
+- unpublished: `unpublished/{path}` with metadata `status`
+- media: `media/{path}/{id}`
