@@ -38,7 +38,7 @@ interface BackendOptions {
 	initialWorkflowStatus: string;
 }
 
-interface Entry {
+interface EntryToPersist {
 	path: string;
 	slug: string;
 	raw: string;
@@ -54,6 +54,20 @@ interface PersistEntryOptions {
 	useWorkflow: boolean;
 	commitMessage: string;
 	hasAssetStore: boolean;
+}
+
+interface UnpublishedEntry {
+	data: string;
+	file: {
+		path: string;
+	};
+	slug: string;
+	metaData: {
+		collection: string;
+		status: string;
+		title?: string;
+		description?: string;
+	};
 }
 
 interface DeleteFileOptions {
@@ -213,7 +227,7 @@ class S3Backend {
 		}];
 	}
 
-	persistEntry = async (entry: Entry, mediaFiles: any, options: PersistEntryOptions) => {
+	persistEntry = async (entry: EntryToPersist, mediaFiles: any, options: PersistEntryOptions) => {
 		console.log('S3Backend::persistEntry');
 		// entry: {
 		// 	"path": "blog/test-title.md",
@@ -222,7 +236,7 @@ class S3Backend {
 		//          ---\ntest-body\n"
 		// }
 		// mediaFiles: []
-		// args: {
+		// options: {
 		// 	"newEntry": true,
 		// 	"parsedData": {
 		// 	  "title": "test-title",
@@ -237,36 +251,53 @@ class S3Backend {
 		console.log(`mediaFiles: ${JSON.stringify(mediaFiles, null, 2)}`);
 		console.log(`args: ${JSON.stringify(options, null, 2)}`);
 		const s3 = await this.getS3();
-		const prefix = options.useWorkflow ? 'unpublished' : 'published';
+		const prefix = options.useWorkflow
+			? `${defaultBasePrefixUnpublished}/`
+			: `${defaultBasePrefixPublished}/`;
 		const headParams: HeadObjectRequest = {
 			Bucket: this.storageConfig.bucket,
-			Key: `${prefix}/${entry.path}`,
+			Key: `${prefix}${entry.path}`,
 		};
 		const putParams: PutObjectRequest = {
 			...headParams,
 			ContentType: 'text/markdown; charset=UTF-8',
 			Body: Buffer.from(entry.raw, 'utf8'),
+			Metadata: {
+				slug: encodeURIComponent(entry.slug),
+				collection: encodeURIComponent(options.collectionName),
+			},
 		};
-		if (options.useWorkflow) {
-			const head = await s3.headObject(headParams).promise()
-				.catch((error) => {
-					console.log('failed to head object');
-					console.log(error);
-					return null;
-				});
-			if (head) {
-				console.log('reusing head metadata:');
-				console.log(head.Metadata);
-				putParams.Metadata = head.Metadata;
-			} else {
-				console.log('creating new metadata');
-				putParams.Metadata = {
-					status: this.options.initialWorkflowStatus,
-				};
+		if (options.parsedData) {
+			if (options.parsedData.title) {
+				putParams.Metadata!.title = encodeURIComponent(options.parsedData.title);
+			}
+			if (options.parsedData.description) {
+				putParams.Metadata!.description = encodeURIComponent(options.parsedData.description);
 			}
 		}
-		console.log('putParams:');
-		console.log(putParams);
+		if (options.useWorkflow) {
+			putParams.Metadata!.status = encodeURIComponent(this.options.initialWorkflowStatus);
+			if (!options.newEntry) {
+				try {
+					const head = await s3.headObject(headParams).promise();
+					console.log('Reusing existing object metadata:');
+					console.log(head.Metadata);
+					if (head.Metadata!.status) {
+						putParams.Metadata!.status = head.Metadata!.status;
+					} else {
+						console.error('Existing unpublished entry does not contain status');
+					}
+				} catch (error) {
+					if (error.code === 'NotFound') {
+						console.error('Existing unpublished entry not found');
+					} else {
+						console.error('Failed to get head for object');
+						throw error;
+					}
+				}
+			}
+		}
+		console.log(`putParams: ${JSON.stringify(putParams, null, 2)}`);
 		await s3.putObject(putParams).promise();
 	}
 
@@ -329,14 +360,14 @@ class S3Backend {
 			// objectList.NextContinuationToken
 			console.log('Received truncated object list; implement pagination!');
 		}
-		return objectList.Contents!.map((info) => {
-			const parts = info.Key!.substr(defaultBasePrefixMedia.length).split('/');
+		return objectList.Contents!.map((object) => {
+			const parts = object.Key!.substr(defaultBasePrefixMedia.length).split('/');
 			const id = parts.pop();
 			const path = `${parts.join('/')}`;
 			const name = parts.pop();
 			const url = s3.getSignedUrl('getObject', {
 				Bucket: this.storageConfig.bucket,
-				Key: info.Key!,
+				Key: object.Key!,
 			});
 			return {
 				id,
@@ -388,7 +419,56 @@ class S3Backend {
 
 	unpublishedEntries = async () => {
 		console.log('S3Backend::unpublishedEntries');
-		return [];
+
+		const prefix = `${defaultBasePrefixUnpublished}/`;
+		const s3 = await this.getS3();
+
+		console.log(`list object beginning with '${prefix}'`);
+		const objectList = await s3.listObjectsV2({
+			Bucket: this.storageConfig.bucket,
+			Prefix: prefix,
+			MaxKeys: 10,
+			// TODO: implement pagination
+			// ContinuationToken: foo,
+		}).promise();
+
+		if (objectList.IsTruncated) {
+			// TODO: implement pagination
+			// objectList.NextContinuationToken
+			console.log('Received truncated object list; implement pagination!');
+		}
+
+		console.log(`Fetch ${objectList.Contents!.length} objects`);
+		const objects = await Promise.all(objectList.Contents!.map((object) => {
+			const getParams = {
+				Bucket: this.storageConfig.bucket,
+				Key: object.Key!,
+			};
+			return s3.getObject(getParams).promise();
+		}));
+
+		console.log(`Return ${objects.length} objects`);
+		return objects.map((object, i) => {
+			console.log(`Process object ${JSON.stringify(object, null, 2)}`);
+			const path = objectList.Contents![i].Key!.substr(prefix.length);
+			const entry: UnpublishedEntry = {
+				data: object.Body!.toString(),
+				file: { path },
+				slug: decodeURIComponent(object.Metadata!.slug),
+				metaData: {
+					collection: decodeURIComponent(object.Metadata!.collection),
+					status: decodeURIComponent(object.Metadata!.status),
+				},
+			};
+			if (object.Metadata!.title) {
+				entry.metaData.title = decodeURIComponent(object.Metadata!.title);
+			}
+			if (object.Metadata!.description) {
+				entry.metaData.description = decodeURIComponent(object.Metadata!.description);
+			}
+			console.log(`unpublished entry: ${JSON.stringify(entry, null, 2)}`);
+			return entry;
+		});
 	}
 
 	unpublishedEntry = async (collection: CmsConfig, slug: string) => {
