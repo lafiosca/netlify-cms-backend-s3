@@ -68,6 +68,7 @@ interface UnpublishedEntry {
 		title?: string;
 		description?: string;
 	};
+	isModification: boolean;
 }
 
 interface DeleteFileOptions {
@@ -146,6 +147,28 @@ class S3Backend {
 			await Auth.currentCredentials(),
 		),
 	})
+
+	private publishedEntryExists = async (collection: string, slug: string) => {
+		const s3 = await this.getS3();
+		const headParams = {
+			Bucket: this.storageConfig.bucket,
+			Key: `${defaultBasePrefixPublished}/${collection}/${slug}`,
+		};
+		try {
+			console.log(`checking if published entry exists: ${JSON.stringify(headParams, null, 2)}`);
+			await s3.headObject(headParams).promise();
+			console.log('published entry exists');
+			return true;
+		} catch (error) {
+			console.log(`caught error: ${error}`);
+			if (error.code !== 'NotFound') {
+				console.log('rethrow it');
+				throw error;
+			}
+		}
+		console.log('published entry does not exist');
+		return false;
+	}
 
 	/*** Authentication ***/
 
@@ -252,19 +275,19 @@ class S3Backend {
 		console.log(`args: ${JSON.stringify(options, null, 2)}`);
 		const s3 = await this.getS3();
 		const prefix = options.useWorkflow
-			? `${defaultBasePrefixUnpublished}/`
-			: `${defaultBasePrefixPublished}/`;
+			? `${defaultBasePrefixUnpublished}`
+			: `${defaultBasePrefixPublished}`;
 		const headParams: HeadObjectRequest = {
 			Bucket: this.storageConfig.bucket,
-			Key: `${prefix}${entry.path}`,
+			Key: `${prefix}/${options.collectionName}/${entry.slug}`,
 		};
 		const putParams: PutObjectRequest = {
 			...headParams,
 			ContentType: 'text/markdown; charset=UTF-8',
 			Body: Buffer.from(entry.raw, 'utf8'),
 			Metadata: {
-				slug: encodeURIComponent(entry.slug),
-				collection: encodeURIComponent(options.collectionName),
+				path: encodeURIComponent(entry.path),
+				commit: encodeURIComponent(options.commitMessage),
 			},
 		};
 		if (options.parsedData) {
@@ -417,7 +440,7 @@ class S3Backend {
 
 	/*** Editorial Workflow ***/
 
-	unpublishedEntries = async () => {
+	unpublishedEntries = async (): Promise<UnpublishedEntry[]> => {
 		console.log('S3Backend::unpublishedEntries');
 
 		const prefix = `${defaultBasePrefixUnpublished}/`;
@@ -439,24 +462,34 @@ class S3Backend {
 		}
 
 		console.log(`Fetch ${objectList.Contents!.length} objects`);
-		const objects = await Promise.all(objectList.Contents!.map((object) => {
-			const getParams = {
+		const objectPacks = await Promise.all(objectList.Contents!.map((object) => {
+			const getUnpublishedParams = {
 				Bucket: this.storageConfig.bucket,
 				Key: object.Key!,
 			};
-			return s3.getObject(getParams).promise();
+			const parts = object.Key!.substr(prefix.length).split('/');
+			const slug = parts.pop()!;
+			const collection = parts.join('/');
+			return Promise.all([
+				slug,
+				collection,
+				s3.getObject(getUnpublishedParams).promise(),
+				this.publishedEntryExists(collection, slug),
+			]);
 		}));
 
-		console.log(`Return ${objects.length} objects`);
-		return objects.map((object, i) => {
+		console.log(`Return ${objectPacks.length} entries`);
+		return objectPacks.map<UnpublishedEntry>(([slug, collection, object, isModification]) => {
 			console.log(`Process object ${JSON.stringify(object, null, 2)}`);
-			const path = objectList.Contents![i].Key!.substr(prefix.length);
 			const entry: UnpublishedEntry = {
+				slug,
+				isModification,
 				data: object.Body!.toString(),
-				file: { path },
-				slug: decodeURIComponent(object.Metadata!.slug),
+				file: {
+					path: decodeURIComponent(object.Metadata!.path),
+				},
 				metaData: {
-					collection: decodeURIComponent(object.Metadata!.collection),
+					collection,
 					status: decodeURIComponent(object.Metadata!.status),
 				},
 			};
@@ -471,11 +504,65 @@ class S3Backend {
 		});
 	}
 
-	unpublishedEntry = async (collection: CmsConfig, slug: string) => {
+	unpublishedEntry = async (collection: CmsConfig, slug: string): Promise<UnpublishedEntry> => {
 		console.log('S3Backend::unpublishedEntry');
 		console.log(`collection: ${JSON.stringify(collection, null, 2)}`);
 		console.log(`slug: ${slug}`);
-		throw new Error('Not implemented');
+		// collection: {
+		// 	"name": "blog",
+		// 	"label": "Blog",
+		// 	"folder": "blog",
+		// 	"create": true,
+		// 	"fields": [
+		// 	  {
+		// 		"name": "path",
+		// 		"label": "Path"
+		// 	  },
+		// 	  {
+		// 		"name": "date",
+		// 		"label": "Date",
+		// 		"widget": "date"
+		// 	  },
+		// 	  {
+		// 		"name": "title",
+		// 		"label": "Title"
+		// 	  },
+		// 	  {
+		// 		"name": "body",
+		// 		"label": "Body",
+		// 		"widget": "markdown"
+		// 	  }
+		// 	],
+		// 	"type": "folder_based_collection"
+		// }
+		// slug: bar
+		const collectionName = collection.get('name');
+		const s3 = await this.getS3();
+		const getParams = {
+			Bucket: this.storageConfig.bucket,
+			Key: `${defaultBasePrefixUnpublished}/${collectionName}/${slug}`,
+		};
+		console.log(`getting object: ${JSON.stringify(getParams, null, 2)}`);
+		const object = await s3.getObject(getParams).promise();
+		const entry: UnpublishedEntry = {
+			slug,
+			file: {
+				path: object.Metadata!.path,
+			},
+			data: object.Body!.toString(),
+			metaData: {
+				collection: collectionName,
+				status: object.Metadata!.status,
+			},
+			isModification: await this.publishedEntryExists(collectionName, slug),
+		};
+		if (object.Metadata!.title) {
+			entry.metaData.title = decodeURIComponent(object.Metadata!.title);
+		}
+		if (object.Metadata!.description) {
+			entry.metaData.description = decodeURIComponent(object.Metadata!.description);
+		}
+		return entry;
 	}
 
 	updateUnpublishedEntryStatus = async (collection: CmsConfig, slug: string, newStatus: any) => {
