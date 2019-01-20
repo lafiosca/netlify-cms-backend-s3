@@ -580,11 +580,17 @@ class S3Backend {
 		throw new Error('Not implemented');
 	}
 
-	deleteUnpublishedEntry = async (collection: CmsConfig, slug: string) => {
+	deleteUnpublishedEntry = async (collectionName: string, slug: string) => {
 		console.log('S3Backend::deleteUnpublishedEntry');
-		console.log(`collection: ${JSON.stringify(collection, null, 2)}`);
+		console.log(`collectionName: ${collectionName}`);
 		console.log(`slug: ${slug}`);
-		throw new Error('Not implemented');
+		const s3 = await this.getS3();
+		const deleteParams = {
+			Bucket: this.storageConfig.bucket,
+			Key: `${defaultBasePrefixUnpublished}/${collectionName}/${slug}`,
+		};
+		console.log(`deleting object: ${JSON.stringify(deleteParams, null, 2)}`);
+		await s3.deleteObject(deleteParams).promise();
 	}
 
 	/*** Pagination ***/
