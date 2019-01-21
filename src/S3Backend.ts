@@ -56,6 +56,14 @@ interface PersistEntryOptions {
 	hasAssetStore: boolean;
 }
 
+interface PublishedEntry {
+	data: string;
+	file: {
+		path: string;
+		label?: string;
+	};
+}
+
 interface UnpublishedEntry {
 	data: string;
 	file: {
@@ -155,19 +163,36 @@ class S3Backend {
 			Key: `${defaultBasePrefixPublished}/${collection}/${slug}`,
 		};
 		try {
-			console.log(`checking if published entry exists: ${JSON.stringify(headParams, null, 2)}`);
 			await s3.headObject(headParams).promise();
-			console.log('published entry exists');
 			return true;
 		} catch (error) {
-			console.log(`caught error: ${error}`);
 			if (error.code !== 'NotFound') {
-				console.log('rethrow it');
 				throw error;
 			}
 		}
-		console.log('published entry does not exist');
 		return false;
+	}
+
+	private fetchObjectsForKeys = async (keys: string[]) => {
+		const s3 = await this.getS3();
+		return Promise.all(
+			keys.map(async (key) => {
+				const params = {
+					Bucket: this.storageConfig.bucket,
+					Key: key,
+				};
+				try {
+					return await s3.getObject(params).promise();
+				} catch (error) {
+					console.log(`s3 error: ${error}`);
+					console.log(`error.code = '${error.code}'`);
+					if (error.code !== 'NoSuchKey') {
+						throw error;
+					}
+				}
+				return null;
+			}),
+		);
 	}
 
 	/*** Authentication ***/
@@ -225,29 +250,67 @@ class S3Backend {
 	/*** Published entries ***/
 
 	entriesByFiles = async (collection: CmsConfig) => {
-		// throw new Error('Not implemented');
 		console.log('S3Backend::entriesByFiles');
 		console.log(`collection: ${JSON.stringify(collection, null, 2)}`);
-		return [{
-			file: {
-				path: 'blog/howdy.md',
-				label: 'foobar',
-			},
-			data: '---\npath: hello\ndate: 2019-01-15T02:01:10.670Z\ntitle: howdy\n---\nhow ya doin\n',
-		}];
+		const collectionName = collection.get('name');
+		const files: PublishedEntry['file'][] = collection.get('files')
+			.map((collectionFile: CmsConfig): PublishedEntry['file'] => ({
+				path: collectionFile.get('file'),
+				label: collectionFile.get('label'),
+			}));
+		const keys = files.map((file) => `${defaultBasePrefixPublished}/${collectionName}/${file.path}`);
+		const objects = await this.fetchObjectsForKeys(keys);
+		const entries: PublishedEntry[] = [];
+		for (let i = 0; i < files.length; i += 1) {
+			const file = files[i];
+			const object = objects[i];
+			if (object !== null) {
+				entries.push({
+					file,
+					data: object.Body!.toString(),
+				});
+			}
+		}
+		console.log(`return entries: ${JSON.stringify(entries, null, 2)}`);
+		return entries;
 	}
 
 	entriesByFolder = async (collection: CmsConfig, extension: string) => {
-		// throw new Error('Not implemented');
-		console.log('S3Backend::entriesByFolder');
 		console.log(`collection: ${JSON.stringify(collection, null, 2)}`);
 		console.log(`extension: ${extension}`);
-		return [{
-			file: {
-				path: 'blog/howdy.md',
-			},
-			data: '---\npath: hello\ndate: 2019-01-15T02:01:10.670Z\ntitle: howdy\n---\nhow ya doin\n',
-		}];
+		const collectionName = collection.get('name');
+		const basePrefix = `${defaultBasePrefixPublished}/`;
+		const prefix = `${collectionName}/`;
+		const s3 = await this.getS3();
+		const objectList = await s3.listObjectsV2({
+			Bucket: this.storageConfig.bucket,
+			Prefix: prefix,
+			// TODO: implement pagination
+			// MaxKeys: 1000,
+			// ContinuationToken: foo,
+		}).promise();
+		if (objectList.IsTruncated) {
+			// TODO: implement pagination
+			// objectList.NextContinuationToken
+			console.log('Received truncated object list; implement pagination!');
+		}
+		const keys = objectList.Contents!.map((object) => object.Key!)
+			.filter((key) => key.endsWith(extension));
+		const objects = await this.fetchObjectsForKeys(keys);
+		const entries: PublishedEntry[] = [];
+		for (let i = 0; i < objects.length; i += 1) {
+			const object = objects[i];
+			if (object !== null) {
+				entries.push({
+					file: {
+						path: keys[i].substr(prefix.length),
+					},
+					data: object.Body!.toString(),
+				});
+			}
+		}
+		console.log(`return entries: ${JSON.stringify(entries, null, 2)}`);
+		return entries;
 	}
 
 	persistEntry = async (entry: EntryToPersist, mediaFiles: any, options: PersistEntryOptions) => {
@@ -314,7 +377,7 @@ class S3Backend {
 					if (error.code === 'NotFound') {
 						console.error('Existing unpublished entry not found');
 					} else {
-						console.error('Failed to get head for object');
+						console.error(`Failed to get head for object; error.code: '${error.code}'`);
 						throw error;
 					}
 				}
@@ -350,7 +413,7 @@ class S3Backend {
 		console.log('putParams:');
 		console.log(putParams);
 		await s3.putObject(putParams).promise();
-		const url = await s3.getSignedUrl('getObject', {
+		const url = s3.getSignedUrl('getObject', {
 			Bucket: putParams.Bucket,
 			Key: putParams.Key,
 		});
