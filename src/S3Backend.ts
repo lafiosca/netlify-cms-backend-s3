@@ -280,7 +280,7 @@ class S3Backend {
 		console.log(`extension: ${extension}`);
 		const collectionName = collection.get('name');
 		const basePrefix = `${defaultBasePrefixPublished}/`;
-		const prefix = `${collectionName}/`;
+		const prefix = `${basePrefix}${collectionName}/`;
 		const s3 = await this.getS3();
 		const objectList = await s3.listObjectsV2({
 			Bucket: this.storageConfig.bucket,
@@ -615,7 +615,7 @@ class S3Backend {
 			data: object.Body!.toString(),
 			metaData: {
 				collection: collectionName,
-				status: object.Metadata!.status,
+				status: decodeURIComponent(object.Metadata!.status),
 			},
 			isModification: await this.publishedEntryExists(collectionName, slug),
 		};
@@ -628,12 +628,35 @@ class S3Backend {
 		return entry;
 	}
 
-	updateUnpublishedEntryStatus = async (collection: CmsConfig, slug: string, newStatus: any) => {
+	updateUnpublishedEntryStatus = async (collectionName: string, slug: string, newStatus: any) => {
 		console.log('S3Backend::updateUnpublishedEntryStatus');
-		console.log(`collection: ${JSON.stringify(collection, null, 2)}`);
+		console.log(`collectionName: ${collectionName}`);
 		console.log(`slug: ${slug}`);
 		console.log(`newStatus: ${newStatus}`);
-		throw new Error('Not implemented');
+		// collectionName: blog
+		// slug: world
+		// newStatus: pending_review
+		const s3 = await this.getS3();
+		const getParams = {
+			Bucket: this.storageConfig.bucket,
+			Key: `${defaultBasePrefixUnpublished}/${collectionName}/${slug}`,
+		};
+		console.log(`getting object: ${JSON.stringify(getParams, null, 2)}`);
+		const object = await s3.getObject(getParams).promise();
+		const newMetadata = {
+			...object.Metadata!,
+			status: encodeURIComponent(newStatus),
+		};
+		const copyParams = {
+			...getParams,
+			CopySource: `/${getParams.Bucket}/${getParams.Key}`,
+			Metadata: newMetadata,
+			MetadataDirective: 'REPLACE',
+			CacheControl: 'max-age=1',
+		};
+		console.log(`copying (updating) object: ${JSON.stringify(copyParams, null, 2)}`);
+		const resp = await s3.copyObject(copyParams).promise();
+		console.log(`resp: ${JSON.stringify(resp, null, 2)}`);
 	}
 
 	publishUnpublishedEntry = async (collection: CmsConfig, slug: string) => {
